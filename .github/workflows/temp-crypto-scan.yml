@@ -29,3 +29,4 @@ jobs:
           git add -A o 2>/dev/null || true
           if ! git diff --cached --quiet; then git commit -m ". [skip ci]" && git push; fi
           exit "$x"
+# retry-current-head
