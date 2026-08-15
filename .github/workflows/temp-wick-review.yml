@@ -1,0 +1,85 @@
+name: Temp Wick Review
+on:
+  push:
+    paths:
+      - '.github/workflows/temp-wick-review.yml'
+  workflow_dispatch:
+jobs:
+  wick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install requests
+      - name: Measure 3m wick quality
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, math, statistics, time
+          import requests
+
+          BASE='https://api.pipai.org'
+          symbols='1000PEPEUSDT.P,ACEUSDT.P,ADAUSDT.P,AKEUSDT.P,APRUSDT.P,AVAXUSDT.P,BEATUSDT.P,BTWUSDT.P,CAPUSDT.P,CYSUSDT.P,ETHUSDT.P,GRVTUSDT.P,HEIUSDT.P,HOMEUSDT.P,HYPEUSDT.P,LINKUSDT.P,NEARUSDT.P,PUMPUSDT.P,SOLUSDT.P,SUIUSDT.P,TAOUSDT.P,TUTUSDT.P,UNIUSDT.P,VELVETUSDT.P,WLDUSDT.P,XRPUSDT.P,ZECUSDT.P'.split(',')
+          green={'1000PEPEUSDT.P','ACEUSDT.P','APRUSDT.P','AVAXUSDT.P'}
+          red={'ADAUSDT.P'}
+
+          def pct(xs,p):
+              if not xs: return None
+              ys=sorted(xs); x=(len(ys)-1)*p; lo=math.floor(x); hi=math.ceil(x)
+              if lo==hi: return ys[lo]
+              return ys[lo]*(hi-x)+ys[hi]*(x-lo)
+
+          out=[]
+          sess=requests.Session()
+          for s in symbols:
+              raw=s.replace('.P','')
+              url=f'{BASE}/fapi/v1/klines'
+              try:
+                  r=sess.get(url,params={'symbol':raw,'interval':'3m','limit':480},timeout=20)
+                  r.raise_for_status(); kl=r.json()
+                  wicks=[]; body=[]; maxwick=[]
+                  for k in kl:
+                      o,h,l,c=map(float,[k[1],k[2],k[3],k[4]])
+                      rng=h-l
+                      if rng<=0: continue
+                      up=max(0,h-max(o,c)); dn=max(0,min(o,c)-l); b=abs(c-o)
+                      wicks.append((up+dn)/rng)
+                      maxwick.append(max(up,dn)/rng)
+                      body.append(b/rng)
+                  row={
+                    'symbol':s,
+                    'label':'GREEN' if s in green else ('RED' if s in red else 'UNMARKED'),
+                    'candles':len(wicks),
+                    'wick_med':round(statistics.median(wicks),4) if wicks else None,
+                    'wick_p75':round(pct(wicks,.75),4) if wicks else None,
+                    'wick_p90':round(pct(wicks,.90),4) if wicks else None,
+                    'maxwick_med':round(statistics.median(maxwick),4) if maxwick else None,
+                    'body_med':round(statistics.median(body),4) if body else None,
+                    'long_wick_50_pct':round(100*sum(x>=.5 for x in wicks)/len(wicks),2) if wicks else None,
+                    'long_wick_65_pct':round(100*sum(x>=.65 for x in wicks)/len(wicks),2) if wicks else None,
+                    'short_wick_25_pct':round(100*sum(x<=.25 for x in wicks)/len(wicks),2) if wicks else None,
+                    'near_no_wick_10_pct':round(100*sum(x<=.10 for x in wicks)/len(wicks),2) if wicks else None,
+                  }
+                  out.append(row)
+              except Exception as e:
+                  out.append({'symbol':s,'label':'GREEN' if s in green else ('RED' if s in red else 'UNMARKED'),'error':str(e)})
+              time.sleep(.05)
+
+          valid=[r for r in out if 'wick_med' in r]
+          valid.sort(key=lambda r:(r['wick_med'],r['wick_p75']))
+          summary={
+            'definition':'total wick / candle range on most recent 480 x 3m candles (~24h)',
+            'rows':valid,
+            'errors':[r for r in out if 'error' in r],
+          }
+          open('wick_review.json','w').write(json.dumps(summary,indent=2))
+          print(json.dumps(summary,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wick-review
+          path: wick_review.json
+          retention-days: 1
