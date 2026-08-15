@@ -1,0 +1,95 @@
+name: Temp Wide CQ
+on:
+  push:
+    paths:
+      - '.github/workflows/temp-wide-cq.yml'
+  workflow_dispatch:
+jobs:
+  cq:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install requests scikit-learn
+      - name: Score wide universe
+        shell: bash
+        run: |
+          python - <<'PY'
+          import requests,json,time,statistics,datetime
+          from concurrent.futures import ThreadPoolExecutor,as_completed
+          import numpy as np
+          from sklearn.pipeline import make_pipeline
+          from sklearn.preprocessing import StandardScaler
+          from sklearn.linear_model import LogisticRegression
+
+          GREEN={'1000PEPE','ACE','APR','AVAX','HEI','HYPE','TAO','WLD'}
+          RED={'ADA','CYS','GRVT','HOME','NEAR','SOL','VELVET'}
+          LABELED=GREEN|RED
+          REVIEW=['ACE','PROM','HEI','SOL','APR','VELVET','LAB','BTW','EDEN','NEAR','FIL','BEAT','KAITO','GRVT','BANK','WLD','TAO','ENA','AKE','BR','HOME','COTI','ONDO','XAUT','SUI','PAXG','TUT','XRP','LINK','TRUMP','BNB','ETH','US','BICO','BCH','ZEC','ADA','AVAX','XMR','HYPE','1000SHIB','CAP','PUMP','AAVE','CYS','UNI','1000PEPE']
+          NEED=sorted(set(REVIEW)|LABELED)
+          BASES=['https://api.pipai.org','https://fapi.binance.com']
+
+          def fetch(sym):
+            errs=[]
+            for base in BASES:
+              for a in range(3):
+                try:
+                  r=requests.get(base+'/fapi/v1/klines',params={'symbol':sym+'USDT','interval':'3m','limit':100},timeout=12)
+                  r.raise_for_status(); kl=r.json(); out=[]
+                  for k in kl:
+                    o,h,l,c=map(float,[k[1],k[2],k[3],k[4]])
+                    if h<=l or c<=0: continue
+                    out.append({'o':o,'h':h,'l':l,'c':c})
+                  if len(out)>=80:return sym,out[-80:],base
+                except Exception as e: errs.append(str(e))
+                time.sleep(.2*(a+1))
+            raise RuntimeError(' | '.join(errs[-4:]))
+
+          def features(xs):
+            body=[]; highs=[]; lows=[]; closes=[]
+            for x in xs:
+              rng=x['h']-x['l']
+              body.append(abs(x['c']-x['o'])/rng)
+              highs.append(x['h']); lows.append(x['l']); closes.append(x['c'])
+            overlaps=[]
+            for i in range(1,len(xs)):
+              inter=max(0,min(highs[i],highs[i-1])-max(lows[i],lows[i-1]))
+              den=min(highs[i]-lows[i],highs[i-1]-lows[i-1])
+              overlaps.append(inter/den if den>0 else 1)
+            ers=[]
+            for i in range(20,len(xs)):
+              path=sum(abs(closes[j]-closes[j-1]) for j in range(i-19,i+1))
+              if path>0:ers.append(abs(closes[i]-closes[i-20])/path)
+            return [statistics.median(body),statistics.median(overlaps),statistics.median(ers)]
+
+          raw={}; sources={}; errors=[]
+          with ThreadPoolExecutor(max_workers=10) as ex:
+            fs={ex.submit(fetch,s):s for s in NEED}
+            for f in as_completed(fs):
+              s=fs[f]
+              try:
+                sym,rows,src=f.result();raw[sym]=rows;sources[sym]=src
+              except Exception as e:errors.append({'symbol':s,'error':str(e)})
+          feats={s:features(v) for s,v in raw.items()}
+          train=sorted(s for s in LABELED if s in feats)
+          X=np.array([feats[s] for s in train],float)
+          y=np.array([1 if s in GREEN else 0 for s in train])
+          model=make_pipeline(StandardScaler(),LogisticRegression(C=1,class_weight='balanced',solver='liblinear',max_iter=2000)).fit(X,y)
+          scored=[]
+          for s in REVIEW:
+            if s not in feats: continue
+            p=float(model.predict_proba(np.array([feats[s]],float))[0,1])*100
+            state='PASS' if p>55 else ('REVIEW' if p>=45 else 'FAIL')
+            scored.append({'ticker':s,'score':round(p,1),'state':state,'features':[round(v,4) for v in feats[s]]})
+          scored.sort(key=lambda x:x['score'],reverse=True)
+          out={'generated_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'trained_labels':len(train),'scores':scored,'counts':{k:sum(1 for r in scored if r['state']==k) for k in ['PASS','REVIEW','FAIL']},'errors':errors,'sources':sources}
+          open('wide_cq.json','w').write(json.dumps(out,indent=2))
+          print(json.dumps({'trained_labels':len(train),'counts':out['counts'],'top15':scored[:15],'errors':len(errors)},indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wide-cq
+          path: wide_cq.json
+          retention-days: 1
