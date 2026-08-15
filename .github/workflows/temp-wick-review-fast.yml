@@ -17,7 +17,7 @@ jobs:
         shell: bash
         run: |
           python - <<'PY'
-          import json, math, statistics
+          import json, statistics
           from concurrent.futures import ThreadPoolExecutor, as_completed
           import requests
           BASE='https://api.pipai.org'
@@ -29,21 +29,37 @@ jobs:
           def one(s):
               raw=s.replace('.P','')
               r=requests.get(f'{BASE}/fapi/v1/klines',params={'symbol':raw,'interval':'3m','limit':480},timeout=12)
-              r.raise_for_status(); kl=r.json(); w=[]; b=[]
+              r.raise_for_status(); kl=r.json(); candles=[]
               for k in kl:
-                  o,h,l,c=map(float,[k[1],k[2],k[3],k[4]]); rng=h-l
-                  if rng<=0: continue
+                  o,h,l,c=map(float,[k[1],k[2],k[3],k[4]])
+                  mid=(o+c)/2 if (o+c)>0 else c
+                  rng=h-l
+                  if rng<=0 or mid<=0: continue
                   up=max(0,h-max(o,c)); dn=max(0,min(o,c)-l)
-                  w.append((up+dn)/rng); b.append(abs(c-o)/rng)
-              return {'symbol':s,'label':'GREEN' if s in green else ('RED' if s in red else 'UNMARKED'),'candles':len(w),'wick_med':round(statistics.median(w),4),'wick_p75':round(pct(w,.75),4),'wick_p90':round(pct(w,.9),4),'body_med':round(statistics.median(b),4),'long50_pct':round(100*sum(x>=.5 for x in w)/len(w),2),'short25_pct':round(100*sum(x<=.25 for x in w)/len(w),2),'near10_pct':round(100*sum(x<=.10 for x in w)/len(w),2)}
+                  candles.append({'range_pct':rng/mid,'maxwick_pct':max(up,dn)/mid,'sumwick_pct':(up+dn)/mid,'body_pct':abs(c-o)/mid})
+              ranges=[x['range_pct'] for x in candles]; medrng=statistics.median(ranges)
+              spike=[x['maxwick_pct']/medrng for x in candles]
+              sumspike=[x['sumwick_pct']/medrng for x in candles]
+              bodies=[x['body_pct']/medrng for x in candles]
+              return {
+                'symbol':s,'label':'GREEN' if s in green else ('RED' if s in red else 'UNMARKED'),'candles':len(candles),
+                'median_range_pct':round(medrng*100,4),
+                'maxwick_vs_medrange_med':round(statistics.median(spike),3),
+                'maxwick_vs_medrange_p90':round(pct(spike,.90),3),
+                'maxwick_vs_medrange_p95':round(pct(spike,.95),3),
+                'sumwick_vs_medrange_p90':round(pct(sumspike,.90),3),
+                'wick_spike_gt1_pct':round(100*sum(x>=1 for x in spike)/len(spike),2),
+                'wick_spike_gt1_5_pct':round(100*sum(x>=1.5 for x in spike)/len(spike),2),
+                'body_vs_medrange_med':round(statistics.median(bodies),3)
+              }
           rows=[]; errors=[]
           with ThreadPoolExecutor(max_workers=10) as ex:
               fs={ex.submit(one,s):s for s in symbols}
               for f in as_completed(fs):
                   try: rows.append(f.result())
                   except Exception as e: errors.append({'symbol':fs[f],'error':str(e)})
-          rows.sort(key=lambda r:r['wick_med'])
-          out={'definition':'most recent 480 x 3m candles (~24h); wick=(upper+lower)/(high-low)','rows':rows,'errors':errors}
+          rows.sort(key=lambda r:(r['maxwick_vs_medrange_p90'],r['wick_spike_gt1_pct']))
+          out={'definition':'3m last 24h; spike = max(upper wick,lower wick) / median 3m candle range','rows':rows,'errors':errors}
           open('wick_review_fast.json','w').write(json.dumps(out,indent=2)); print(json.dumps(out,indent=2))
           PY
       - uses: actions/upload-artifact@v4
