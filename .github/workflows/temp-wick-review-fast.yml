@@ -1,0 +1,53 @@
+name: Temp Wick Review Fast
+on:
+  push:
+    paths:
+      - '.github/workflows/temp-wick-review-fast.yml'
+  workflow_dispatch:
+jobs:
+  wick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install requests
+      - name: Measure marked rows
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, math, statistics
+          from concurrent.futures import ThreadPoolExecutor, as_completed
+          import requests
+          BASE='https://api.pipai.org'
+          symbols=['1000PEPEUSDT.P','ACEUSDT.P','ADAUSDT.P','AKEUSDT.P','APRUSDT.P','AVAXUSDT.P','BEATUSDT.P','BTWUSDT.P','CAPUSDT.P','CYSUSDT.P']
+          green={'1000PEPEUSDT.P','ACEUSDT.P','APRUSDT.P','AVAXUSDT.P'}
+          red={'ADAUSDT.P'}
+          def pct(xs,p):
+              ys=sorted(xs); x=(len(ys)-1)*p; lo=int(x); hi=min(lo+1,len(ys)-1); return ys[lo] if lo==hi else ys[lo]*(hi-x)+ys[hi]*(x-lo)
+          def one(s):
+              raw=s.replace('.P','')
+              r=requests.get(f'{BASE}/fapi/v1/klines',params={'symbol':raw,'interval':'3m','limit':480},timeout=12)
+              r.raise_for_status(); kl=r.json(); w=[]; b=[]
+              for k in kl:
+                  o,h,l,c=map(float,[k[1],k[2],k[3],k[4]]); rng=h-l
+                  if rng<=0: continue
+                  up=max(0,h-max(o,c)); dn=max(0,min(o,c)-l)
+                  w.append((up+dn)/rng); b.append(abs(c-o)/rng)
+              return {'symbol':s,'label':'GREEN' if s in green else ('RED' if s in red else 'UNMARKED'),'candles':len(w),'wick_med':round(statistics.median(w),4),'wick_p75':round(pct(w,.75),4),'wick_p90':round(pct(w,.9),4),'body_med':round(statistics.median(b),4),'long50_pct':round(100*sum(x>=.5 for x in w)/len(w),2),'short25_pct':round(100*sum(x<=.25 for x in w)/len(w),2),'near10_pct':round(100*sum(x<=.10 for x in w)/len(w),2)}
+          rows=[]; errors=[]
+          with ThreadPoolExecutor(max_workers=10) as ex:
+              fs={ex.submit(one,s):s for s in symbols}
+              for f in as_completed(fs):
+                  try: rows.append(f.result())
+                  except Exception as e: errors.append({'symbol':fs[f],'error':str(e)})
+          rows.sort(key=lambda r:r['wick_med'])
+          out={'definition':'most recent 480 x 3m candles (~24h); wick=(upper+lower)/(high-low)','rows':rows,'errors':errors}
+          open('wick_review_fast.json','w').write(json.dumps(out,indent=2)); print(json.dumps(out,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wick-review-fast
+          path: wick_review_fast.json
+          retention-days: 1
