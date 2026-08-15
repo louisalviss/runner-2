@@ -1,0 +1,96 @@
+name: Temp Wide Crypto Review
+on:
+  push:
+    paths:
+      - '.github/workflows/temp-wide-crypto-review.yml'
+  workflow_dispatch:
+jobs:
+  wide:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install requests
+      - name: Build relaxed crypto universes
+        shell: bash
+        run: |
+          python - <<'PY'
+          import requests, json, statistics, time, random
+          from concurrent.futures import ThreadPoolExecutor, as_completed
+
+          BASES=['https://api.pipai.org','https://fapi.binance.com']
+          EXCLUDE={'BTCUSDT','DOGEUSDT','DASHUSDT','LTCUSDT'}
+          CONFIGS=[
+            {'name':'A','q24':40e6,'avg10':40e6,'vol1w':1.5,'adr14':1.5},
+            {'name':'B','q24':30e6,'avg10':30e6,'vol1w':1.5,'adr14':1.5},
+            {'name':'C','q24':25e6,'avg10':25e6,'vol1w':1.25,'adr14':1.5},
+            {'name':'D','q24':20e6,'avg10':20e6,'vol1w':1.25,'adr14':1.25},
+          ]
+
+          def get(path,params=None):
+            errs=[]
+            for base in BASES:
+              for a in range(3):
+                try:
+                  r=requests.get(base+path,params=params,timeout=12); r.raise_for_status(); return r.json(),base
+                except Exception as e:
+                  errs.append(str(e)); time.sleep(.25*(a+1))
+            raise RuntimeError(' | '.join(errs[-4:]))
+
+          info,_=get('/fapi/v1/exchangeInfo')
+          tks,_=get('/fapi/v1/ticker/24hr')
+          meta={s['symbol']:s for s in info['symbols'] if s.get('status')=='TRADING' and s.get('quoteAsset')=='USDT' and s.get('contractType')=='PERPETUAL' and s['symbol'] not in EXCLUDE}
+          tmap={x['symbol']:x for x in tks if x['symbol'] in meta}
+          # Broad pre-gate so daily calls stay bounded.
+          candidates=[s for s,x in tmap.items() if float(x.get('quoteVolume') or 0)>=20e6]
+
+          def metric(sym):
+            kl,src=get('/fapi/v1/klines',{'symbol':sym,'interval':'1d','limit':20})
+            if len(kl)<15: return None
+            # Exclude today's unfinished daily candle.
+            d=kl[:-1]
+            last14=d[-14:]; last10=d[-10:]; last7=d[-7:]
+            qvol=[float(k[7]) for k in last10]
+            avg10=sum(qvol)/len(qvol)
+            adrs=[]
+            for k in last14:
+              o,h,l,c=map(float,[k[1],k[2],k[3],k[4]])
+              if o>0: adrs.append((h-l)/o*100)
+            adr14=sum(adrs)/len(adrs)
+            highs=[float(k[2]) for k in last7]; lows=[float(k[3]) for k in last7]
+            vol1w=(max(highs)-min(lows))/min(lows)*100 if min(lows)>0 else 0
+            return {'symbol':sym,'q24':float(tmap[sym].get('quoteVolume') or 0),'avg10':avg10,'vol1w':vol1w,'adr14':adr14,'source':src}
+
+          rows=[]; errors=[]
+          with ThreadPoolExecutor(max_workers=10) as ex:
+            fs={ex.submit(metric,s):s for s in candidates}
+            for f in as_completed(fs):
+              try:
+                v=f.result()
+                if v: rows.append(v)
+              except Exception as e: errors.append({'symbol':fs[f],'error':str(e)})
+
+          sets={}
+          for c in CONFIGS:
+            got=[r for r in rows if r['q24']>=c['q24'] and r['avg10']>=c['avg10'] and r['vol1w']>=c['vol1w'] and r['adr14']>=c['adr14']]
+            sets[c['name']]={'config':c,'count':len(got),'symbols':sorted(r['symbol'] for r in got)}
+          # pick count closest to 50; tie favors stricter config order.
+          pick=min(CONFIGS,key=lambda c:abs(sets[c['name']]['count']-50))
+          chosen=[r for r in rows if r['symbol'] in set(sets[pick['name']]['symbols'])]
+          rnd=random.Random(20260815); rnd.shuffle(chosen)
+          for r in chosen:
+            r['ticker']=r['symbol'][:-4] if r['symbol'].endswith('USDT') else r['symbol']
+            r['tradingview']='BINANCE:'+r['symbol']+'.P'
+            for k in ['q24','avg10']: r[k]=round(r[k]/1e6,1)
+            for k in ['vol1w','adr14']: r[k]=round(r[k],3)
+          out={'active_perpetual':len(meta),'pre_gate_20m':len(candidates),'configs':sets,'picked':pick['name'],'rows':chosen,'errors':errors}
+          open('wide_crypto_review.json','w').write(json.dumps(out,indent=2))
+          print(json.dumps({'active_perpetual':len(meta),'pre_gate_20m':len(candidates),'counts':{k:v['count'] for k,v in sets.items()},'picked':pick['name'],'picked_count':len(chosen),'errors':len(errors)},indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wide-crypto-review
+          path: wide_crypto_review.json
+          retention-days: 1
