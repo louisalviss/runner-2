@@ -7,6 +7,7 @@ on:
         default: "8"
   schedule:
     - cron: "30 8 * * *"
+    - cron: "30 15 * * *"
     - cron: "0 14,15 * * 1-5"
     - cron: "45 16,17,19,20 * * 1-5"
   push:
