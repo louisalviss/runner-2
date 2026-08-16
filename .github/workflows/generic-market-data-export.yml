@@ -1,0 +1,43 @@
+name: Generic Market Data Export
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - market_data_worker.py
+      - requests/binance_15m_2026_summer.json
+      - .github/workflows/generic-market-data-export.yml
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependency
+        run: pip install requests
+      - name: Static check
+        run: python -m py_compile market_data_worker.py
+      - name: Export historical candles
+        id: export
+        continue-on-error: true
+        run: python market_data_worker.py --request requests/binance_15m_2026_summer.json --out market_data_output
+      - name: Upload raw-data artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: generic-binance-15m-2026-summer
+          path: market_data_output
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 9
+      - name: Enforce export success
+        if: steps.export.outcome != 'success'
+        run: exit 1
