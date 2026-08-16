@@ -1,0 +1,54 @@
+name: Generic USDT Daily Archive Export
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - market_data_worker.py
+      - market_data_batch_worker.py
+      - archive_symbol_index.py
+      - .github/workflows/generic-usdt-daily-archive.yml
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependency
+        run: pip install requests
+      - name: Static check
+        run: python -m py_compile market_data_worker.py market_data_batch_worker.py archive_symbol_index.py
+      - name: Build generic archive index
+        run: python archive_symbol_index.py --out archive_symbol_index.json
+      - name: Export raw daily USDT archive data
+        id: export
+        continue-on-error: true
+        run: >-
+          python market_data_batch_worker.py
+          --symbols-index archive_symbol_index.json
+          --suffix USDT
+          --interval 1d
+          --start 2026-06-01T00:00:00Z
+          --end 2026-08-16T00:00:00Z
+          --workers 32
+          --out daily_archive_output
+      - name: Upload raw daily artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: generic-binance-usdt-1d-2026-summer
+          path: daily_archive_output
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 9
+      - name: Enforce export success
+        if: steps.export.outcome != 'success'
+        run: exit 1
