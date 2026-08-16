@@ -46,7 +46,7 @@ jobs:
           path: usdt_3m_broad_output
           if-no-files-found: error
           retention-days: 1
-          compression-level: 9
+          compression-level: 1
       - name: Enforce export success
         if: steps.export.outcome != 'success'
         run: exit 1
