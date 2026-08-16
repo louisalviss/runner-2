@@ -1,0 +1,92 @@
+name: Fix Crypto 404 Policy
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/fix-404.yml"]
+
+jobs:
+  fix-and-test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Patch encoded scanner source
+        shell: bash
+        run: |
+          python - <<'PY'
+          import ast, base64, re, zlib
+          p='a.py'
+          text=open(p,encoding='utf-8').read()
+          mod=ast.parse(text)
+          source=None
+          for node in mod.body:
+              if isinstance(node, ast.Assign) and any(isinstance(t,ast.Name) and t.id=='SOURCE' for t in node.targets):
+                  source=ast.literal_eval(node.value)
+                  break
+          if source is None:
+              raise SystemExit('SOURCE not found')
+          s=zlib.decompress(base64.b85decode(source)).decode('utf-8')
+
+          old_decl='''    kline_data: dict[str, list[list[Any]]] = {}\n    kline_errors: dict[str, str] = {}\n'''
+          new_decl='''    kline_data: dict[str, list[list[Any]]] = {}\n    kline_errors: dict[str, str] = {}\n    kline_skipped_404: dict[str, str] = {}\n'''
+          if s.count(old_decl) != 1:
+              raise SystemExit(f'declaration match count={s.count(old_decl)}')
+          s=s.replace(old_decl,new_decl,1)
+
+          old_fetch='''            try:\n                sym, data = fut.result()\n                kline_data[sym] = data\n            except Exception as exc:\n                kline_errors[symbol] = f"{type(exc).__name__}: {exc}"[:300]\n'''
+          new_fetch='''            try:\n                sym, data = fut.result()\n                kline_data[sym] = data\n            except Exception as exc:\n                message = f"{type(exc).__name__}: {exc}"[:300]\n                if "HTTP 404" in message:\n                    kline_skipped_404[symbol] = message\n                else:\n                    kline_errors[symbol] = message\n'''
+          if s.count(old_fetch) != 1:
+              raise SystemExit(f'fetch match count={s.count(old_fetch)}')
+          s=s.replace(old_fetch,new_fetch,1)
+
+          old_diag='''        "kline_error_sample": [\n            {"symbol": symbol, "error": message}\n            for symbol, message in sorted(kline_errors.items())[:20]\n        ],\n        "insufficient_history_count": len(insufficient),\n'''
+          new_diag='''        "kline_error_sample": [\n            {"symbol": symbol, "error": message}\n            for symbol, message in sorted(kline_errors.items())[:20]\n        ],\n        "kline_skipped_404_count": len(kline_skipped_404),\n        "kline_skipped_404_sample": [\n            {"symbol": symbol, "error": message}\n            for symbol, message in sorted(kline_skipped_404.items())[:20]\n        ],\n        "insufficient_history_count": len(insufficient),\n'''
+          if s.count(old_diag) != 1:
+              raise SystemExit(f'diagnostics match count={s.count(old_diag)}')
+          s=s.replace(old_diag,new_diag,1)
+
+          compile(s,'<patched-runner2>','exec')
+          encoded=base64.b85encode(zlib.compress(s.encode('utf-8'),9)).decode('ascii')
+          lines=text.splitlines()
+          for i,line in enumerate(lines):
+              if line.startswith('SOURCE = '):
+                  lines[i]='SOURCE = '+repr(encoded)
+                  break
+          else:
+              raise SystemExit('SOURCE assignment not found')
+          open(p,'w',encoding='utf-8').write('\n'.join(lines)+'\n')
+          print('patched source: isolated HTTP 404s are skipped; other kline failures remain fatal')
+          PY
+          python -m py_compile a.py
+      - name: Install requirements
+        shell: bash
+        run: |
+          python a.py 7 >/tmp/r
+          pip install --no-input -r /tmp/r
+      - name: Run real crypto-refresh and persist result
+        id: scan
+        shell: bash
+        run: |
+          set +e
+          python a.py 2
+          rc=$?
+          set -e
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Commit fix and test output
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add a.py o
+          git commit -m "fix: skip symbol-specific kline 404 [skip ci]"
+          git push
+      - name: Enforce successful scan
+        shell: bash
+        run: |
+          test "${{ steps.scan.outputs.rc }}" = "0"
