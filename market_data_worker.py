@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """Generic Binance USD-M historical candle exporter.
 
-This utility intentionally contains no trading-system filters, thresholds, entry
-logic, portfolio rules, or symbol-selection logic. It only downloads requested
-historical OHLCV and writes neutral JSONL/manifest outputs.
+No trading-system thresholds, entries, portfolio rules, or strategy decisions
+live here. The optional discovery pass is only a broad transport optimization:
+find current USDT perpetuals with at least one sufficiently active UTC day, then
+export raw OHLCV for downstream consumers.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -17,7 +19,7 @@ from typing import Any
 import requests
 
 BASES = ("https://fapi.binance.com", "https://api.pipai.org")
-UA = "Mozilla/5.0 market-data-worker/1.0"
+UA = "Mozilla/5.0 market-data-worker/1.1"
 
 
 def request_json(session: requests.Session, url: str, *, params: dict[str, Any] | None = None, attempts: int = 5):
@@ -77,9 +79,50 @@ def fetch_klines(session: requests.Session, base: str, symbol: str, interval: st
         cursor = nxt
         if len(payload) < 1500:
             break
-        time.sleep(0.08)
+        time.sleep(0.05)
     dedup = {int(r[0]): r for r in rows}
     return [dedup[k] for k in sorted(dedup)]
+
+
+def current_candidates(exchange_info: dict[str, Any], req: dict[str, Any]) -> list[str]:
+    discover = req.get("discover_current_usdt_perpetuals")
+    if not discover:
+        return []
+    quote = str(req.get("discover_quote_asset", "USDT"))
+    include_types = set(req.get("discover_contract_types", ["PERPETUAL"]))
+    return sorted(
+        str(x["symbol"])
+        for x in exchange_info.get("symbols", [])
+        if isinstance(x, dict)
+        and x.get("status") == "TRADING"
+        and x.get("quoteAsset") == quote
+        and x.get("contractType") in include_types
+        and x.get("symbol")
+    )
+
+
+def broad_daily_prefilter(base: str, symbols: list[str], start_ms: int, end_ms: int, floor: float, workers: int):
+    keep = []
+    errors: dict[str, str] = {}
+    stats: dict[str, float] = {}
+
+    def one(symbol: str):
+        rows = fetch_klines(requests.Session(), base, symbol, "1d", start_ms, end_ms)
+        mx = max((float(r[7]) for r in rows), default=0.0)
+        return symbol, mx
+
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        futures = {pool.submit(one, symbol): symbol for symbol in symbols}
+        for fut in as_completed(futures):
+            symbol = futures[fut]
+            try:
+                sym, mx = fut.result()
+                stats[sym] = mx
+                if mx >= floor:
+                    keep.append(sym)
+            except Exception as exc:
+                errors[symbol] = str(exc)
+    return sorted(keep), errors, stats
 
 
 def main() -> int:
@@ -89,7 +132,7 @@ def main() -> int:
     args = ap.parse_args()
 
     req = json.loads(Path(args.request).read_text(encoding="utf-8"))
-    symbols = sorted({str(s).upper() for s in req["symbols"]})
+    seed_symbols = sorted({str(s).upper() for s in req.get("symbols", [])})
     interval = str(req.get("interval", "15m"))
     if interval not in {"1m", "3m", "5m", "15m", "1h", "1d"}:
         raise SystemExit("unsupported interval")
@@ -104,15 +147,35 @@ def main() -> int:
     base, exchange_info = choose_base(session)
     known = {str(x.get("symbol")): x for x in exchange_info.get("symbols", []) if isinstance(x, dict) and x.get("symbol")}
 
+    discovered = current_candidates(exchange_info, req)
+    prefilter_errors: dict[str, str] = {}
+    prefilter_stats: dict[str, float] = {}
+    if discovered:
+        floor = float(req.get("broad_max_daily_quote_volume_floor_usd", 40_000_000))
+        discovered, prefilter_errors, prefilter_stats = broad_daily_prefilter(
+            base,
+            discovered,
+            int(start.timestamp() * 1000),
+            int(end.timestamp() * 1000),
+            floor,
+            int(req.get("discovery_workers", 8)),
+        )
+    symbols = sorted(set(seed_symbols) | set(discovered))
+
     manifest = {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "purpose": "generic historical OHLCV export",
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "source": base,
         "interval": interval,
         "start_utc": start.isoformat(),
         "end_utc": end.isoformat(),
-        "requested_symbols": symbols,
+        "seed_symbols": seed_symbols,
+        "discovery_enabled": bool(req.get("discover_current_usdt_perpetuals")),
+        "discovery_current_count_before_prefilter": len(current_candidates(exchange_info, req)),
+        "discovery_count_after_broad_prefilter": len(discovered),
+        "broad_prefilter_errors": prefilter_errors,
+        "export_symbols": symbols,
         "results": [],
     }
     failures = 0
