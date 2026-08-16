@@ -1,0 +1,56 @@
+name: Generic USDT 3m Broad Chunks
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - market_data_worker.py
+      - market_data_batch_worker.py
+      - requests/binance_usdt_3m_broad_chunk_*.json
+      - .github/workflows/generic-usdt-3m-broad-chunks.yml
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    strategy:
+      fail-fast: false
+      matrix:
+        chunk: ['01','02','03','04']
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependency
+        run: pip install requests
+      - name: Static check
+        run: python -m py_compile market_data_worker.py market_data_batch_worker.py
+      - name: Export raw 3m broad chunk
+        id: export
+        continue-on-error: true
+        run: >-
+          python market_data_batch_worker.py
+          --symbols-index requests/binance_usdt_3m_broad_chunk_${{ matrix.chunk }}.json
+          --suffix USDT
+          --interval 3m
+          --start 2026-06-01T00:00:00Z
+          --end 2026-08-16T00:00:00Z
+          --workers 24
+          --out usdt_3m_chunk_${{ matrix.chunk }}
+      - name: Upload raw 3m chunk artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: generic-binance-usdt-3m-chunk-${{ matrix.chunk }}
+          path: usdt_3m_chunk_${{ matrix.chunk }}
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 1
+      - name: Enforce export success
+        if: steps.export.outcome != 'success'
+        run: exit 1
