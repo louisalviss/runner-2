@@ -1,54 +1,24 @@
 #!/usr/bin/env python3
 """Generic Binance USD-M historical candle exporter.
 
-No trading-system thresholds, entries, portfolio rules, or strategy decisions
-live here. The optional discovery pass is only a broad transport optimization:
-find current USDT perpetuals with at least one sufficiently active UTC day, then
-export raw OHLCV for downstream consumers.
+This public worker contains no trading-system filters, thresholds, entry rules,
+or portfolio logic. It only downloads requested raw USD-M futures klines from
+Binance's public data archive and writes neutral JSONL files.
 """
 from __future__ import annotations
 
 import argparse
+import csv
+import io
 import json
-import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+import zipfile
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
 
 import requests
 
-BASES = ("https://fapi.binance.com", "https://api.pipai.org")
-UA = "Mozilla/5.0 market-data-worker/1.1"
-
-
-def request_json(session: requests.Session, url: str, *, params: dict[str, Any] | None = None, attempts: int = 5):
-    last = None
-    for i in range(attempts):
-        try:
-            r = session.get(url, params=params, headers={"User-Agent": UA}, timeout=30)
-            if r.status_code in (418, 429, 500, 502, 503, 504):
-                raise RuntimeError(f"HTTP {r.status_code}")
-            r.raise_for_status()
-            return r.json()
-        except Exception as exc:
-            last = exc
-            if i + 1 < attempts:
-                time.sleep(min(8, 1.5 * (2**i)))
-    raise RuntimeError(f"GET failed {url}: {last}")
-
-
-def choose_base(session: requests.Session) -> tuple[str, dict[str, Any]]:
-    errors = []
-    for base in BASES:
-        try:
-            payload = request_json(session, f"{base}/fapi/v1/exchangeInfo", attempts=2)
-            if isinstance(payload, dict) and isinstance(payload.get("symbols"), list):
-                return base, payload
-            raise RuntimeError("unexpected exchangeInfo payload")
-        except Exception as exc:
-            errors.append(f"{base}: {exc}")
-    raise RuntimeError("no usable Binance-compatible endpoint: " + " | ".join(errors))
+BASE = "https://data.binance.vision/data/futures/um"
+UA = "Mozilla/5.0 market-data-worker/1.2"
 
 
 def parse_utc(value: str) -> datetime:
@@ -58,71 +28,95 @@ def parse_utc(value: str) -> datetime:
     return x.astimezone(timezone.utc)
 
 
-def fetch_klines(session: requests.Session, base: str, symbol: str, interval: str, start_ms: int, end_ms: int):
-    step_ms = {"1m": 60_000, "3m": 180_000, "5m": 300_000, "15m": 900_000, "1h": 3_600_000, "1d": 86_400_000}[interval]
-    cursor = start_ms
-    rows = []
-    while cursor < end_ms:
-        payload = request_json(
-            session,
-            f"{base}/fapi/v1/klines",
-            params={"symbol": symbol, "interval": interval, "startTime": cursor, "endTime": end_ms - 1, "limit": 1500},
-        )
-        if not isinstance(payload, list):
-            raise RuntimeError(f"bad kline payload for {symbol}")
-        if not payload:
-            break
-        rows.extend(payload)
-        nxt = int(payload[-1][0]) + step_ms
-        if nxt <= cursor:
-            raise RuntimeError(f"cursor stalled for {symbol}")
-        cursor = nxt
-        if len(payload) < 1500:
-            break
-        time.sleep(0.05)
-    dedup = {int(r[0]): r for r in rows}
-    return [dedup[k] for k in sorted(dedup)]
+def get_zip(session: requests.Session, url: str) -> bytes | None:
+    r = session.get(url, headers={"User-Agent": UA}, timeout=45)
+    if r.status_code == 404:
+        return None
+    r.raise_for_status()
+    return r.content
 
 
-def current_candidates(exchange_info: dict[str, Any], req: dict[str, Any]) -> list[str]:
-    discover = req.get("discover_current_usdt_perpetuals")
-    if not discover:
-        return []
-    quote = str(req.get("discover_quote_asset", "USDT"))
-    include_types = set(req.get("discover_contract_types", ["PERPETUAL"]))
-    return sorted(
-        str(x["symbol"])
-        for x in exchange_info.get("symbols", [])
-        if isinstance(x, dict)
-        and x.get("status") == "TRADING"
-        and x.get("quoteAsset") == quote
-        and x.get("contractType") in include_types
-        and x.get("symbol")
-    )
+def parse_zip(raw: bytes) -> list[list[str]]:
+    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+        names = [n for n in zf.namelist() if not n.endswith("/")]
+        if not names:
+            return []
+        text = zf.read(names[0]).decode("utf-8-sig")
+    out: list[list[str]] = []
+    for row in csv.reader(io.StringIO(text)):
+        if not row:
+            continue
+        try:
+            int(float(row[0]))
+        except Exception:
+            continue
+        out.append(row)
+    return out
 
 
-def broad_daily_prefilter(base: str, symbols: list[str], start_ms: int, end_ms: int, floor: float, workers: int):
-    keep = []
-    errors: dict[str, str] = {}
-    stats: dict[str, float] = {}
+def month_iter(start: date, end_exclusive: date):
+    y, m = start.year, start.month
+    while date(y, m, 1) < end_exclusive:
+        yield y, m
+        if m == 12:
+            y, m = y + 1, 1
+        else:
+            m += 1
 
-    def one(symbol: str):
-        rows = fetch_klines(requests.Session(), base, symbol, "1d", start_ms, end_ms)
-        mx = max((float(r[7]) for r in rows), default=0.0)
-        return symbol, mx
 
-    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        futures = {pool.submit(one, symbol): symbol for symbol in symbols}
-        for fut in as_completed(futures):
-            symbol = futures[fut]
-            try:
-                sym, mx = fut.result()
-                stats[sym] = mx
-                if mx >= floor:
-                    keep.append(sym)
-            except Exception as exc:
-                errors[symbol] = str(exc)
-    return sorted(keep), errors, stats
+def next_month(y: int, m: int) -> date:
+    return date(y + 1, 1, 1) if m == 12 else date(y, m + 1, 1)
+
+
+def fetch_symbol(session: requests.Session, symbol: str, interval: str, start: datetime, end: datetime):
+    rows: list[list[str]] = []
+    source_files: list[str] = []
+    start_d, end_d = start.date(), end.date()
+    for y, m in month_iter(date(start_d.year, start_d.month, 1), end_d + timedelta(days=1)):
+        month_start = date(y, m, 1)
+        month_end = next_month(y, m)
+        overlap_start = max(start_d, month_start)
+        overlap_end = min(end_d + timedelta(days=1), month_end)
+        if overlap_start >= overlap_end:
+            continue
+
+        # A month is complete relative to requested end => prefer one monthly ZIP.
+        if month_end <= end_d:
+            name = f"{symbol}-{interval}-{y:04d}-{m:02d}.zip"
+            url = f"{BASE}/monthly/klines/{symbol}/{interval}/{name}"
+            raw = get_zip(session, url)
+            if raw is not None:
+                rows.extend(parse_zip(raw))
+                source_files.append(url)
+            continue
+
+        # Partial final month: daily archives are published the following day.
+        d = overlap_start
+        while d < overlap_end:
+            # end is exclusive; do not request the still-open UTC day.
+            day_start = datetime(d.year, d.month, d.day, tzinfo=timezone.utc)
+            if day_start >= end:
+                break
+            name = f"{symbol}-{interval}-{d.isoformat()}.zip"
+            url = f"{BASE}/daily/klines/{symbol}/{interval}/{name}"
+            raw = get_zip(session, url)
+            if raw is not None:
+                rows.extend(parse_zip(raw))
+                source_files.append(url)
+            d += timedelta(days=1)
+
+    start_ms = int(start.timestamp() * 1000)
+    end_ms = int(end.timestamp() * 1000)
+    dedup: dict[int, list[str]] = {}
+    for row in rows:
+        t = int(float(row[0]))
+        # Futures archives are millisecond timestamps; normalize defensively.
+        if t > 10**15:
+            t //= 1000
+            row = [str(t), *row[1:]]
+        if start_ms <= t < end_ms:
+            dedup[t] = row
+    return [dedup[k] for k in sorted(dedup)], source_files
 
 
 def main() -> int:
@@ -132,74 +126,49 @@ def main() -> int:
     args = ap.parse_args()
 
     req = json.loads(Path(args.request).read_text(encoding="utf-8"))
-    seed_symbols = sorted({str(s).upper() for s in req.get("symbols", [])})
+    symbols = sorted({str(s).upper() for s in req.get("symbols", [])})
     interval = str(req.get("interval", "15m"))
-    if interval not in {"1m", "3m", "5m", "15m", "1h", "1d"}:
-        raise SystemExit("unsupported interval")
     start = parse_utc(req["start_utc"])
     end = parse_utc(req["end_utc"])
-    if start >= end:
-        raise SystemExit("start must be before end")
+    if not symbols or start >= end:
+        raise SystemExit("invalid request")
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     session = requests.Session()
-    base, exchange_info = choose_base(session)
-    known = {str(x.get("symbol")): x for x in exchange_info.get("symbols", []) if isinstance(x, dict) and x.get("symbol")}
-
-    discovered = current_candidates(exchange_info, req)
-    prefilter_errors: dict[str, str] = {}
-    prefilter_stats: dict[str, float] = {}
-    if discovered:
-        floor = float(req.get("broad_max_daily_quote_volume_floor_usd", 40_000_000))
-        discovered, prefilter_errors, prefilter_stats = broad_daily_prefilter(
-            base,
-            discovered,
-            int(start.timestamp() * 1000),
-            int(end.timestamp() * 1000),
-            floor,
-            int(req.get("discovery_workers", 8)),
-        )
-    symbols = sorted(set(seed_symbols) | set(discovered))
-
     manifest = {
-        "schema_version": "1.1",
+        "schema_version": "1.2",
         "purpose": "generic historical OHLCV export",
+        "source": "Binance Public Data / USD-M Futures klines",
+        "base": BASE,
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
-        "source": base,
         "interval": interval,
         "start_utc": start.isoformat(),
         "end_utc": end.isoformat(),
-        "seed_symbols": seed_symbols,
-        "discovery_enabled": bool(req.get("discover_current_usdt_perpetuals")),
-        "discovery_current_count_before_prefilter": len(current_candidates(exchange_info, req)),
-        "discovery_count_after_broad_prefilter": len(discovered),
-        "broad_prefilter_errors": prefilter_errors,
-        "export_symbols": symbols,
+        "symbols": symbols,
         "results": [],
     }
+
     failures = 0
-    for idx, symbol in enumerate(symbols, 1):
+    for i, symbol in enumerate(symbols, 1):
         try:
-            rows = fetch_klines(session, base, symbol, interval, int(start.timestamp() * 1000), int(end.timestamp() * 1000))
+            rows, source_files = fetch_symbol(session, symbol, interval, start, end)
             path = out / f"{symbol}_{interval}.jsonl"
             with path.open("w", encoding="utf-8") as fh:
-                for r in rows:
-                    fh.write(json.dumps(r, separators=(",", ":")) + "\n")
-            meta = known.get(symbol, {})
+                for row in rows:
+                    fh.write(json.dumps(row, separators=(",", ":")) + "\n")
             manifest["results"].append({
                 "symbol": symbol,
                 "rows": len(rows),
                 "status": "OK" if rows else "EMPTY",
-                "contract_type_current": meta.get("contractType"),
-                "onboard_date_current": meta.get("onboardDate"),
                 "file": path.name,
+                "source_file_count": len(source_files),
             })
-            print(f"[{idx}/{len(symbols)}] {symbol}: {len(rows)} rows")
+            print(f"[{i}/{len(symbols)}] {symbol}: {len(rows)} rows from {len(source_files)} files")
         except Exception as exc:
             failures += 1
             manifest["results"].append({"symbol": symbol, "rows": 0, "status": "ERROR", "error": str(exc)})
-            print(f"[{idx}/{len(symbols)}] {symbol}: ERROR {exc}")
+            print(f"[{i}/{len(symbols)}] {symbol}: ERROR {exc}")
 
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return 2 if failures else 0
