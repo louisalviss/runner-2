@@ -1,0 +1,35 @@
+name: Generic Archive Symbol Index
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - archive_symbol_index.py
+      - .github/workflows/generic-archive-symbol-index.yml
+
+permissions:
+  contents: read
+
+jobs:
+  index:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependency
+        run: pip install requests
+      - name: Static check
+        run: python -m py_compile archive_symbol_index.py
+      - name: Build archive symbol index
+        run: python archive_symbol_index.py --out archive_symbol_index.json
+      - name: Upload symbol-index artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: generic-binance-archive-symbol-index
+          path: archive_symbol_index.json
+          if-no-files-found: error
+          retention-days: 1
