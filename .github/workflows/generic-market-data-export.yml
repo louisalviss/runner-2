@@ -7,6 +7,7 @@ on:
     paths:
       - market_data_worker.py
       - requests/binance_15m_2026_summer.json
+      - requests/binance_3m_2026_summer.json
       - .github/workflows/generic-market-data-export.yml
 
 permissions:
@@ -28,12 +29,12 @@ jobs:
       - name: Export historical candles
         id: export
         continue-on-error: true
-        run: python market_data_worker.py --request requests/binance_15m_2026_summer.json --out market_data_output
+        run: python market_data_worker.py --request requests/binance_3m_2026_summer.json --out market_data_output
       - name: Upload raw-data artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: generic-binance-15m-2026-summer
+          name: generic-binance-3m-2026-summer
           path: market_data_output
           if-no-files-found: error
           retention-days: 1
