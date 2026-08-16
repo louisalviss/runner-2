@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Generic Binance Data Vision archive symbol indexer.
 
-Lists USD-M Futures kline symbol directories from the public S3 archive.
-No trading filters, thresholds, strategy rules, or private data are used.
+Lists symbol directories from a caller-supplied public Binance Data Vision S3
+prefix. No trading filters, thresholds, strategy rules, or private data are
+used.
 """
 from __future__ import annotations
 
@@ -16,7 +17,8 @@ import xml.etree.ElementTree as ET
 import requests
 
 S3 = "https://s3-ap-northeast-1.amazonaws.com/data.binance.vision"
-UA = "Mozilla/5.0 archive-symbol-index/1.0"
+UA = "Mozilla/5.0 archive-symbol-index/1.1"
+DEFAULT_PREFIX = "data/futures/um/monthly/klines/"
 
 
 def list_common_prefixes(prefix: str) -> list[str]:
@@ -38,7 +40,6 @@ def list_common_prefixes(prefix: str) -> list[str]:
             break
         next_marker = root.findtext("s3:NextMarker", default="", namespaces=ns)
         if not next_marker:
-            # With delimiter listings, fall back to the last common prefix.
             next_marker = prefixes[-1] if prefixes else ""
         if not next_marker or next_marker == marker:
             raise RuntimeError("S3 listing pagination stalled")
@@ -48,9 +49,10 @@ def list_common_prefixes(prefix: str) -> list[str]:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--prefix", default=DEFAULT_PREFIX)
     ap.add_argument("--out", default="archive_symbol_index.json")
     args = ap.parse_args()
-    prefix = "data/futures/um/monthly/klines/"
+    prefix = args.prefix if args.prefix.endswith("/") else args.prefix + "/"
     paths = list_common_prefixes(prefix)
     symbols = []
     for p in paths:
@@ -58,16 +60,16 @@ def main() -> int:
         if tail:
             symbols.append(tail.upper())
     payload = {
-        "schema_version": "1.0",
-        "purpose": "generic Binance Data Vision USD-M Futures archive symbol index",
+        "schema_version": "1.1",
+        "purpose": "generic Binance Data Vision archive symbol index",
         "source": S3,
         "prefix": prefix,
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "symbol_count": len(symbols),
         "symbols": sorted(set(symbols)),
     }
-    Path(args.out).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps({"symbol_count": payload["symbol_count"]}))
+    Path(args.out).write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    print(json.dumps({"prefix": prefix, "symbol_count": payload["symbol_count"]}))
     return 0
 
 
