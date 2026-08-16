@@ -1,0 +1,12 @@
+name: Cloudflare Permission Probe
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Confirm Cloudflare can dispatch runner-2
+        run: echo "cloudflare-actions-write-ok"
