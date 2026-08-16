@@ -1,0 +1,52 @@
+name: Generic USDT 3m Broad Export
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - market_data_worker.py
+      - market_data_batch_worker.py
+      - requests/binance_usdt_3m_broad_summer_index.json
+      - .github/workflows/generic-usdt-3m-broad.yml
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependency
+        run: pip install requests
+      - name: Static check
+        run: python -m py_compile market_data_worker.py market_data_batch_worker.py
+      - name: Export raw 3m broad USDT data
+        id: export
+        continue-on-error: true
+        run: >-
+          python market_data_batch_worker.py
+          --symbols-index requests/binance_usdt_3m_broad_summer_index.json
+          --suffix USDT
+          --interval 3m
+          --start 2026-06-01T00:00:00Z
+          --end 2026-08-16T00:00:00Z
+          --workers 32
+          --out usdt_3m_broad_output
+      - name: Upload raw 3m artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: generic-binance-usdt-3m-broad-2026-summer
+          path: usdt_3m_broad_output
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 9
+      - name: Enforce export success
+        if: steps.export.outcome != 'success'
+        run: exit 1
