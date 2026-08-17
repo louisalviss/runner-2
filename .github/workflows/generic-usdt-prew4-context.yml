@@ -1,0 +1,78 @@
+name: Generic USDT Pre-W4 Context Export
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/generic-usdt-prew4-context.yml
+
+permissions:
+  contents: read
+
+jobs:
+  daily:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependency
+        run: pip install requests
+      - name: Static check
+        run: python -m py_compile market_data_worker.py market_data_batch_worker.py archive_symbol_index.py
+      - name: Build generic archive index
+        run: python archive_symbol_index.py --out archive_symbol_index.json
+      - name: Export raw daily USDT archive data
+        run: >-
+          python market_data_batch_worker.py
+          --symbols-index archive_symbol_index.json
+          --suffix USDT
+          --interval 1d
+          --start 2026-05-15T00:00:00Z
+          --end 2026-06-20T00:00:00Z
+          --workers 32
+          --out prew4_daily_output
+      - name: Upload raw daily artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: generic-binance-usdt-1d-prew4-context
+          path: prew4_daily_output
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 9
+
+  fifteen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependency
+        run: pip install requests
+      - name: Static check
+        run: python -m py_compile market_data_worker.py market_data_batch_worker.py archive_symbol_index.py
+      - name: Build generic archive index
+        run: python archive_symbol_index.py --out archive_symbol_index.json
+      - name: Export raw 15m USDT archive data
+        run: >-
+          python market_data_batch_worker.py
+          --symbols-index archive_symbol_index.json
+          --suffix USDT
+          --interval 15m
+          --start 2026-05-15T00:00:00Z
+          --end 2026-06-20T00:00:00Z
+          --workers 32
+          --out prew4_15m_output
+      - name: Upload raw 15m artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: generic-binance-usdt-15m-prew4-context
+          path: prew4_15m_output
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 9
