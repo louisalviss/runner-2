@@ -1,0 +1,32 @@
+name: WR FX Index Canonical DayZone 2014 2025
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'wr_fx_index_canonical_dayzone_2014_2025.py'
+      - '.github/workflows/wr-fx-index-canonical-dayzone-2014-2025.yml'
+
+jobs:
+  validate:
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [forex, index]
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install requests==2.32.4 beautifulsoup4==4.13.4 websocket-client==1.8.0
+      - name: Fetch frozen Wave Rider engine
+        run: |
+          mkdir -p /tmp/runner3/formal-tests
+          curl -fsSL https://raw.githubusercontent.com/louisalviss/runner-3/main/formal-tests/wr_cross_asset_screen.py -o /tmp/runner3/formal-tests/wr_cross_asset_screen.py
+      - name: Run canonical T-day Zone validation
+        run: python wr_fx_index_canonical_dayzone_2014_2025.py --group ${{ matrix.group }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wr-${{ matrix.group }}-canonical-dayzone-2014-2025
+          path: wr_${{ matrix.group }}_canonical_dayzone_2014_2025.json
