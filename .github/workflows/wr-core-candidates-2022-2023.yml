@@ -1,0 +1,26 @@
+name: WR Core Candidates 2022 2023
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/wr-core-candidates-2022-2023.yml']
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install requests==2.32.4 beautifulsoup4==4.13.4 websocket-client==1.8.0
+      - name: Fetch frozen Wave Rider engine
+        run: git clone --depth=1 https://github.com/louisalviss/runner-3.git /tmp/runner3
+      - name: Run frozen 2022-2023 confirmation
+        run: python wr_core_candidates_2022_2023.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wr-core-candidates-2022-2023
+          path: wr_core_candidates_2022_2023.json
+          retention-days: 90
