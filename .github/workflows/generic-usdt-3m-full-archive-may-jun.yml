@@ -1,0 +1,62 @@
+name: Generic Full Archive USDT 3m May-Jun
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/generic-usdt-3m-full-archive-may-jun.yml
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    strategy:
+      fail-fast: false
+      matrix:
+        chunk: [0,1,2,3,4,5,6,7]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependency
+        run: pip install requests
+      - name: Static check
+        run: python -m py_compile market_data_worker.py market_data_batch_worker.py archive_symbol_index.py
+      - name: Build generic archive index
+        run: python archive_symbol_index.py --out archive_symbol_index.json
+      - name: Slice USDT archive index
+        env:
+          CHUNK: ${{ matrix.chunk }}
+        run: |
+          python - <<'PY'
+          import json, os
+          d=json.load(open('archive_symbol_index.json'))
+          syms=sorted(s for s in d.get('symbols',[]) if s.endswith('USDT'))
+          k=int(os.environ['CHUNK']); n=8
+          part=syms[k::n]
+          json.dump({'schema_version':'1.0','purpose':'generic archive USDT chunk','chunk':k,'chunk_count':n,'symbols':part},open('archive_chunk.json','w'),indent=2,ensure_ascii=False)
+          print('chunk',k,'symbols',len(part))
+          PY
+      - name: Export raw 3m archive chunk
+        run: >-
+          python market_data_batch_worker.py
+          --symbols-index archive_chunk.json
+          --suffix USDT
+          --interval 3m
+          --start 2026-05-15T00:00:00Z
+          --end 2026-06-20T00:00:00Z
+          --workers 24
+          --out full_archive_3m_chunk_${{ matrix.chunk }}
+      - name: Upload raw chunk artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: generic-full-archive-usdt-3m-may-jun-${{ matrix.chunk }}
+          path: full_archive_3m_chunk_${{ matrix.chunk }}
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 1
