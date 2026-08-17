@@ -1,4 +1,4 @@
-name: WR FX Index Canonical DayZone 2014 2025
+name: WR FX Index Canonical DayZone 2018 2025
 
 on:
   workflow_dispatch:
@@ -24,9 +24,9 @@ jobs:
         run: |
           mkdir -p /tmp/runner3/formal-tests
           curl -fsSL https://raw.githubusercontent.com/louisalviss/runner-3/main/formal-tests/wr_cross_asset_screen.py -o /tmp/runner3/formal-tests/wr_cross_asset_screen.py
-      - name: Run canonical T-day Zone validation
+      - name: Run canonical T-day Zone discovery
         run: python wr_fx_index_canonical_dayzone_2014_2025.py --group ${{ matrix.group }}
       - uses: actions/upload-artifact@v4
         with:
-          name: wr-${{ matrix.group }}-canonical-dayzone-2014-2025
-          path: wr_${{ matrix.group }}_canonical_dayzone_2014_2025.json
+          name: wr-${{ matrix.group }}-canonical-dayzone-2018-2025
+          path: wr_${{ matrix.group }}_canonical_dayzone_2018_2025.json
