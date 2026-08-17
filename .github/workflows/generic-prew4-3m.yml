@@ -1,0 +1,36 @@
+name: Generic Pre-W4 3m Export
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - requests/binance_3m_prew4_candidates.json
+      - .github/workflows/generic-prew4-3m.yml
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependency
+        run: pip install requests
+      - name: Static check
+        run: python -m py_compile market_data_worker.py
+      - name: Export raw 3m candles
+        run: python market_data_worker.py --request requests/binance_3m_prew4_candidates.json --out prew4_3m_output
+      - name: Upload raw 3m artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: generic-binance-3m-prew4-candidates
+          path: prew4_3m_output
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 9
