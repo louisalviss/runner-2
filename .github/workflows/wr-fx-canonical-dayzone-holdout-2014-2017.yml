@@ -1,0 +1,25 @@
+name: WR FX Canonical DayZone Holdout 2014 2017
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'wr_fx_canonical_dayzone_holdout_2014_2017.py'
+      - '.github/workflows/wr-fx-canonical-dayzone-holdout-2014-2017.yml'
+jobs:
+  validate:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: pip install requests==2.32.4 beautifulsoup4==4.13.4 websocket-client==1.8.0
+      - name: Fetch frozen Wave Rider engine
+        run: |
+          mkdir -p /tmp/runner3/formal-tests
+          curl -fsSL https://raw.githubusercontent.com/louisalviss/runner-3/main/formal-tests/wr_cross_asset_screen.py -o /tmp/runner3/formal-tests/wr_cross_asset_screen.py
+      - name: Run pristine holdout
+        run: python wr_fx_canonical_dayzone_holdout_2014_2017.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wr-fx-canonical-dayzone-holdout-2014-2017
+          path: wr_fx_canonical_dayzone_holdout_2014_2017.json
