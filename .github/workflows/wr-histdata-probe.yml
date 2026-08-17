@@ -1,0 +1,46 @@
+name: WR HistData long-source probe
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/wr-histdata-probe.yml']
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install requests==2.32.4 beautifulsoup4==4.13.4
+      - name: Download EURUSD 2025 M1
+        run: |
+          python - <<'PY'
+          import requests,os,zipfile,json
+          from bs4 import BeautifulSoup
+          pair='EURUSD'; year='2025'; month=None
+          ref=f'https://www.histdata.com/download-free-forex-historical-data/?/ascii/1-minute-bar-quotes/{pair.lower()}/{year}'
+          s=requests.Session(); r=s.get(ref,timeout=30); print('GET',r.status_code,len(r.content),ref)
+          soup=BeautifulSoup(r.content,'html.parser'); el=soup.find('input',{'id':'tk'})
+          if not el: raise SystemExit('NO_TOKEN')
+          token=el.attrs['value']; data={'tk':token,'date':year,'datemonth':year,'platform':'ASCII','timeframe':'M1','fxpair':pair}
+          headers={'Referer':ref,'Origin':'https://www.histdata.com','Content-Type':'application/x-www-form-urlencoded'}
+          z=s.post('https://www.histdata.com/get.php',data=data,headers=headers,timeout=120)
+          print('POST',z.status_code,len(z.content),z.headers.get('content-type'))
+          open('eurusd2025.zip','wb').write(z.content)
+          ok=zipfile.is_zipfile('eurusd2025.zip'); print('ZIP',ok)
+          if not ok: print(z.text[:500]); raise SystemExit(2)
+          with zipfile.ZipFile('eurusd2025.zip') as q:
+            print('FILES',q.namelist()); info=[]
+            for n in q.namelist():
+              b=q.read(n); info.append({'name':n,'bytes':len(b),'head':b[:160].decode('utf-8','replace')})
+          open('histdata_probe.json','w').write(json.dumps(info,indent=2))
+          print(json.dumps(info,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wr-histdata-probe
+          path: histdata_probe.json
+          retention-days: 30
