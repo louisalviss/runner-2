@@ -1,0 +1,26 @@
+name: WR FX Overlap Prior 2018 2021
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/wr-fx-overlap-prior-2018-2021.yml']
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install requests==2.32.4 beautifulsoup4==4.13.4 websocket-client==1.8.0
+      - name: Fetch frozen Wave Rider engine
+        run: git clone --depth=1 https://github.com/louisalviss/runner-3.git /tmp/runner3
+      - name: Run frozen prior-era FX overlap validation
+        run: python wr_fx_overlap_prior_2018_2021.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wr-fx-overlap-prior-2018-2021
+          path: wr_fx_overlap_prior_2018_2021.json
+          retention-days: 90
