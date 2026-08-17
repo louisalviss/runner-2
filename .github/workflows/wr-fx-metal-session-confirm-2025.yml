@@ -1,0 +1,26 @@
+name: WR FX Metal Session Confirm 2025
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/wr-fx-metal-session-confirm-2025.yml']
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install requests==2.32.4 beautifulsoup4==4.13.4 websocket-client==1.8.0
+      - name: Fetch frozen Wave Rider engine
+        run: git clone --depth=1 https://github.com/louisalviss/runner-3.git /tmp/runner3
+      - name: Run 2025 session confirmation
+        run: python wr_fx_metal_session_confirm_2025.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wr-fx-metal-session-confirm-2025
+          path: wr_fx_metal_session_confirm_2025.json
+          retention-days: 90
