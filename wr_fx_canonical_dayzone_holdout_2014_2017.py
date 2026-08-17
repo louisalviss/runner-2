@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 import importlib.util, json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 # PRISTINE HOLDOUT: frozen after 2018-2025 full canonical T-day x Zone discovery.
 # No rule, pair, timeframe, or Wave Rider parameter is changed.
@@ -14,15 +14,43 @@ m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 m.YEARS=YEARS
 b=m.b
 
+# Same machine-calendar normalization as discovery. This copy intentionally omits the
+# discovery script's 2024-specific spot audit because 2024 is outside this holdout.
+def fetch_calendar(years):
+    wanted={'CPI':'CPI','Inflation Rate YoY':'CPI','Non Farm Payrolls':'NFP','Fed Interest Rate Decision':'FOMC'}
+    raw=[]; cur=datetime(min(years),1,1,tzinfo=timezone.utc); end=datetime(max(years)+1,1,1,tzinfo=timezone.utc)
+    while cur<end:
+        nxt=min(cur+timedelta(days=35),end)
+        p={'from':m.iso_z(cur),'to':m.iso_z(nxt-timedelta(milliseconds=1)),'countries':'US'}
+        r=m.requests.get(m.TV_CAL,params=p,headers=m.UA,timeout=45); r.raise_for_status(); payload=r.json()
+        if payload.get('status') not in ('ok','success',None): raise RuntimeError(f'TV_CAL_STATUS {payload.get("status")}')
+        raw.extend(payload.get('result',[])); cur=nxt
+    selected={}
+    for x in raw:
+        typ=wanted.get(x.get('title')); ds=x.get('date')
+        if not typ or not ds: continue
+        dt=datetime.fromisoformat(ds.replace('Z','+00:00')).astimezone(timezone.utc)
+        if dt.year not in years: continue
+        key=(typ,dt.isoformat()); prev=selected.get(key)
+        if prev and prev['title']=='CPI': continue
+        selected[key]={'type':typ,'dt':dt,'title':x.get('title'),'source_detail':x.get('source'),'ticker':x.get('ticker')}
+    events=sorted(selected.values(),key=lambda x:x['dt']); audit={}
+    for y in years:
+        e=[x for x in events if x['dt'].year==y]; counts={k:sum(x['type']==k for x in e) for k in ('CPI','NFP','FOMC')}
+        if not (10<=counts['CPI']<=13 and 10<=counts['NFP']<=13 and 6<=counts['FOMC']<=12):
+            raise RuntimeError(f'CALENDAR_AUDIT_FAIL {y} {counts}')
+        audit[str(y)]={'counts':counts,'events':[{'type':x['type'],'utc':x['dt'].isoformat(),'vn':x['dt'].astimezone(m.TZ_VN).isoformat(),'trading_day':str(m.trading_day_key_dt(x['dt'])),'title':x['title'],'source_detail':x.get('source_detail'),'ticker':x.get('ticker')} for x in e]}
+    return events,audit
+
 def set_year(y):
     st=datetime(y,1,1,tzinfo=timezone.utc); en=datetime(y+1,1,1,tzinfo=timezone.utc)
     b.START=st; b.END=en; b.m.START=st; b.m.END=en
 
 def main():
-    events,audit=m.fetch_tv_calendar(YEARS)
+    events,audit=fetch_calendar(YEARS)
     event_days=sorted({m.trading_day_key_dt(e['dt']) for e in events})
     out={
-      'schema':'wr-fx-canonical-dayzone-holdout-2014-2017-v1',
+      'schema':'wr-fx-canonical-dayzone-holdout-2014-2017-v2',
       'status':'PRISTINE_HOLDOUT',
       'frozen_from':'2018-2025 full canonical T-day x Zone discovery',
       'strategy':'Wave Rider v2.5.13 frozen core/lifecycle Python replication',
