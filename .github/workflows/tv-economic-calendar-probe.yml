@@ -7,16 +7,27 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: Probe 2024 US economic calendar
+      - name: Audit macro anchors 2018-2025
         run: |
           python - <<'PY'
-          import requests
-          u='https://economic-calendar.tradingview.com/events'
-          p={'from':'2024-01-01T00:00:00.000Z','to':'2024-01-31T23:59:59.999Z','countries':'US'}
-          r=requests.get(u,params=p,headers={'Origin':'https://www.tradingview.com','User-Agent':'Mozilla/5.0'},timeout=30)
-          r.raise_for_status()
-          open('tvprobe.json','w').write(r.text)
-          print('bytes',len(r.text))
+          import requests,json
+          from datetime import datetime,timedelta,timezone
+          u='https://economic-calendar.tradingview.com/events'; H={'Origin':'https://www.tradingview.com','User-Agent':'Mozilla/5.0'}
+          out={}
+          for y in range(2018,2026):
+            rows=[]; cur=datetime(y,1,1,tzinfo=timezone.utc); end=datetime(y+1,1,1,tzinfo=timezone.utc)
+            while cur<end:
+              nxt=min(cur+timedelta(days=35),end)
+              p={'from':cur.isoformat(timespec='milliseconds').replace('+00:00','Z'),'to':(nxt-timedelta(milliseconds=1)).isoformat(timespec='milliseconds').replace('+00:00','Z'),'countries':'US'}
+              r=requests.get(u,params=p,headers=H,timeout=30); r.raise_for_status(); rows+=r.json().get('result',[]); cur=nxt
+            z={}
+            for x in rows:
+              title=x.get('title','')
+              if any(k in title.lower() for k in ['cpi','payroll','interest rate decision']):
+                key=(title,x.get('date')); z[str(key)]={k:x.get(k) for k in ['title','date','source','ticker','importance']}
+            vals=list(z.values())
+            out[str(y)]={'n_rows':len(rows),'interesting':sorted(vals,key=lambda x:(x.get('date') or '',x.get('title') or ''))}
+          open('tvprobe.json','w').write(json.dumps(out,indent=2))
           PY
       - uses: actions/upload-artifact@v4
         with:
