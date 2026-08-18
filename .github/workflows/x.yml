@@ -10,15 +10,25 @@ on:
     - cron: "30 15 * * *"
     - cron: "0 14,15 * * 1-5"
     - cron: "45 16,17,19,20 * * 1-5"
+    - cron: "5 14,15 * * 1-5"
+    - cron: "50 16,17,19,20 * * 1-5"
+    - cron: "15 22 * * 1-5"
   push:
     branches: [main]
     paths: [".github/workflows/x.yml"]
 concurrency:
-  group: x
+  group: x-${{ github.event_name }}-${{ github.event.schedule || inputs.m || 'push' }}
   cancel-in-progress: false
 jobs:
   x:
-    if: github.event_name != 'push' && (github.event_name != 'workflow_dispatch' || inputs.m != '9')
+    if: >-
+      (github.event_name == 'schedule' &&
+       github.event.schedule != '5 14,15 * * 1-5' &&
+       github.event.schedule != '50 16,17,19,20 * * 1-5' &&
+       github.event.schedule != '15 22 * * 1-5') ||
+      (github.event_name == 'workflow_dispatch' &&
+       inputs.m != '9' && inputs.m != '11' && inputs.m != '12' &&
+       inputs.m != '13' && inputs.m != '14' && inputs.m != '18')
     permissions:
       contents: write
     runs-on: ubuntu-latest
@@ -45,6 +55,136 @@ jobs:
           git add -A o 2>/dev/null || true
           if ! git diff --cached --quiet; then git commit -m ". [skip ci]" && git push; fi
           exit "$x"
+
+  stock:
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'schedule' &&
+       (github.event.schedule == '5 14,15 * * 1-5' ||
+        github.event.schedule == '50 16,17,19,20 * * 1-5' ||
+        github.event.schedule == '15 22 * * 1-5')) ||
+      (github.event_name == 'workflow_dispatch' &&
+       (inputs.m == '11' || inputs.m == '12' || inputs.m == '13' ||
+        inputs.m == '14' || inputs.m == '18'))
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Resolve Stock mode
+        id: stock_mode
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
+          INPUT_M: ${{ inputs.m }}
+        run: |
+          MODE=""
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            MODE=probe
+          elif [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            case "$INPUT_M" in
+              11) MODE=main ;;
+              12) MODE=mid ;;
+              13) MODE=preclose ;;
+              14) MODE=smoothness ;;
+              18|*) MODE=auto ;;
+            esac
+          else
+            read ET_HOUR ET_MINUTE <<<"$(python -c 'from datetime import datetime, timezone; from zoneinfo import ZoneInfo; x=datetime.now(timezone.utc).astimezone(ZoneInfo("America/New_York")); print(x.hour, x.minute)')"
+            if [[ "$EVENT_SCHEDULE" == "5 14,15 * * 1-5" ]]; then
+              [[ "$ET_HOUR" == "10" ]] && MODE=main || MODE=noop
+            elif [[ "$EVENT_SCHEDULE" == "50 16,17,19,20 * * 1-5" ]]; then
+              if [[ "$ET_HOUR" == "12" && "$ET_MINUTE" == "50" ]]; then
+                MODE=mid
+              elif [[ "$ET_HOUR" == "15" && "$ET_MINUTE" == "50" ]]; then
+                MODE=preclose
+              else
+                MODE=noop
+              fi
+            elif [[ "$EVENT_SCHEDULE" == "15 22 * * 1-5" ]]; then
+              MODE=smoothness
+            else
+              MODE=noop
+            fi
+          fi
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          echo "Stock mode=$MODE schedule=$EVENT_SCHEDULE"
+
+      - name: Download pinned Stock producer
+        if: steps.stock_mode.outputs.mode != 'noop'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/wr-stock-src stock/diagnostics
+          REF="5894027b3d76cf6c631f15139b39ebddac945d0d"
+          for f in stock_runner.py stock_runner_entry.py requirements.txt; do
+            curl --fail-with-body -sSL \
+              "https://raw.githubusercontent.com/louisalviss/runner-1/$REF/$f" \
+              -o "/tmp/wr-stock-src/$f"
+          done
+          printf '%s\n' "$REF" > stock/diagnostics/source_ref.txt
+
+      - name: Install Stock runtime
+        if: steps.stock_mode.outputs.mode != 'noop'
+        shell: bash
+        run: |
+          set +e
+          pip install --disable-pip-version-check -r /tmp/wr-stock-src/requirements.txt >stock/diagnostics/install_stdout.txt 2>stock/diagnostics/install_stderr.txt
+          rc=$?
+          set -e
+          printf '%s\n' "$rc" > stock/diagnostics/install_exit_code.txt
+          exit "$rc"
+
+      - name: Run Stock producer
+        if: steps.stock_mode.outputs.mode != 'noop'
+        shell: bash
+        env:
+          MODE: ${{ steps.stock_mode.outputs.mode }}
+        run: |
+          mkdir -p stock/diagnostics
+          set +e
+          (
+            cd stock
+            python /tmp/wr-stock-src/stock_runner_entry.py --mode "$MODE"
+          ) >stock/diagnostics/last_stdout.txt 2>stock/diagnostics/last_stderr.txt
+          rc=$?
+          set -e
+          printf '%s\n' "$rc" > stock/diagnostics/last_exit_code.txt
+          date -u +%FT%TZ > stock/diagnostics/finished_utc.txt
+          exit "$rc"
+
+      - name: Persist Stock state
+        if: always()
+        shell: bash
+        run: |
+          git config user.name "wave-rider-stock-runner[bot]"
+          git config user.email "wave-rider-stock-runner[bot]@users.noreply.github.com"
+          git add -A stock/o stock/diagnostics 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "No Stock state changes."
+            exit 0
+          fi
+          git commit -m "data: Wave Rider Stock state [skip ci]"
+          for attempt in 1 2 3 4 5; do
+            if git pull --rebase origin main && git push origin HEAD:main; then
+              exit 0
+            fi
+            git rebase --abort 2>/dev/null || true
+            sleep $((attempt * 3))
+          done
+          echo "Unable to persist Stock state after retries." >&2
+          exit 1
+
   c:
     if: github.event_name == 'push' && github.event.head_commit.message == 'c'
     permissions:
@@ -68,6 +208,7 @@ jobs:
           git push --force origin main
           sleep 5
           curl -fsSL -X POST -H "Authorization: Bearer ${T}" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/x.yml/dispatches" -d '{"ref":"main","inputs":{"m":"9"}}'
+
   q:
     if: github.event_name == 'workflow_dispatch' && inputs.m == '9'
     permissions:
