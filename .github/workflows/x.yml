@@ -13,6 +13,8 @@ on:
     - cron: "5 14,15 * * 1-5"
     - cron: "50 16,17,19,20 * * 1-5"
     - cron: "15 22 * * 1-5"
+  issues:
+    types: [opened]
   push:
     branches: [main]
     paths: [".github/workflows/x.yml"]
@@ -59,6 +61,7 @@ jobs:
   stock:
     if: >-
       github.event_name == 'push' ||
+      (github.event_name == 'issues' && github.event.issue.title == '[wr-stock-probe]') ||
       (github.event_name == 'schedule' &&
        (github.event.schedule == '5 14,15 * * 1-5' ||
         github.event.schedule == '50 16,17,19,20 * * 1-5' ||
@@ -89,7 +92,7 @@ jobs:
           INPUT_M: ${{ inputs.m }}
         run: |
           MODE=""
-          if [[ "$EVENT_NAME" == "push" ]]; then
+          if [[ "$EVENT_NAME" == "push" || "$EVENT_NAME" == "issues" ]]; then
             MODE=probe
           elif [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
             case "$INPUT_M" in
