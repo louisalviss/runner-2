@@ -2,7 +2,7 @@ name: Recovery Crypto Main 2026-08-18
 
 on:
   issues:
-    types: [opened]
+    types: [opened, reopened]
 
 permissions:
   contents: write
@@ -10,13 +10,13 @@ permissions:
 
 concurrency:
   group: recovery-crypto-main-20260818
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   recover:
     if: github.event.issue.title == '[wr-recovery-crypto-main-20260818]'
     runs-on: ubuntu-latest
-    timeout-minutes: 65
+    timeout-minutes: 80
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -68,14 +68,22 @@ jobs:
           python a.py 7 >/tmp/recovery_requirements.txt
           pip install --no-input -r /tmp/recovery_requirements.txt
 
-      - name: Run explicit Crypto main recovery
+      - name: Run explicit Crypto main recovery with retries
         shell: bash
         run: |
           mkdir -p recovery
-          set +e
-          python a.py 3 >recovery/crypto_main_20260818_stdout.txt 2>recovery/crypto_main_20260818_stderr.txt
-          rc=$?
-          set -e
+          rc=1
+          : > recovery/crypto_main_20260818_attempts.log
+          for attempt in 1 2 3 4 5; do
+            echo "attempt=$attempt started=$(date -u +%FT%TZ)" | tee -a recovery/crypto_main_20260818_attempts.log
+            set +e
+            python a.py 3 >"recovery/crypto_main_20260818_attempt_${attempt}_stdout.txt" 2>"recovery/crypto_main_20260818_attempt_${attempt}_stderr.txt"
+            rc=$?
+            set -e
+            echo "attempt=$attempt rc=$rc finished=$(date -u +%FT%TZ)" | tee -a recovery/crypto_main_20260818_attempts.log
+            if [ "$rc" -eq 0 ]; then break; fi
+            if [ "$attempt" -lt 5 ]; then sleep 180; fi
+          done
           printf '%s\n' "$rc" > recovery/crypto_main_20260818_exit_code.txt
           date -u +%FT%TZ > recovery/crypto_main_20260818_finished_utc.txt
 
@@ -85,13 +93,13 @@ jobs:
           if ! git diff --cached --quiet; then
             git commit -m 'data: recover Crypto main 2026-08-18 [skip ci]'
             pushed=0
-            for attempt in 1 2 3 4 5; do
+            for push_attempt in 1 2 3 4 5; do
               if git pull --rebase origin main && git push origin HEAD:main; then
                 pushed=1
                 break
               fi
               git rebase --abort 2>/dev/null || true
-              sleep $((attempt * 2))
+              sleep $((push_attempt * 2))
             done
             if [ "$pushed" -ne 1 ]; then exit 91; fi
           fi
