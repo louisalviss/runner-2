@@ -10,7 +10,7 @@ on:
     - cron: "30 15 * * *"
     - cron: "0 14,15 * * 1-5"
     - cron: "45 16,17,19,20 * * 1-5"
-    - cron: "5 14,15 * * 1-5"
+    - cron: "35 14,15 * * 1-5"
     - cron: "50 16,17,19,20 * * 1-5"
     - cron: "15 22 * * 1-5"
   issues:
@@ -25,7 +25,7 @@ jobs:
   x:
     if: >-
       (github.event_name == 'schedule' &&
-       github.event.schedule != '5 14,15 * * 1-5' &&
+       github.event.schedule != '35 14,15 * * 1-5' &&
        github.event.schedule != '50 16,17,19,20 * * 1-5' &&
        github.event.schedule != '15 22 * * 1-5') ||
       (github.event_name == 'workflow_dispatch' &&
@@ -63,7 +63,7 @@ jobs:
       github.event_name == 'push' ||
       (github.event_name == 'issues' && github.event.issue.title == '[wr-stock-probe]') ||
       (github.event_name == 'schedule' &&
-       (github.event.schedule == '5 14,15 * * 1-5' ||
+       (github.event.schedule == '35 14,15 * * 1-5' ||
         github.event.schedule == '50 16,17,19,20 * * 1-5' ||
         github.event.schedule == '15 22 * * 1-5')) ||
       (github.event_name == 'workflow_dispatch' &&
@@ -104,8 +104,8 @@ jobs:
             esac
           else
             read ET_HOUR ET_MINUTE <<<"$(python -c 'from datetime import datetime, timezone; from zoneinfo import ZoneInfo; x=datetime.now(timezone.utc).astimezone(ZoneInfo("America/New_York")); print(x.hour, x.minute)')"
-            if [[ "$EVENT_SCHEDULE" == "5 14,15 * * 1-5" ]]; then
-              [[ "$ET_HOUR" == "10" ]] && MODE=main || MODE=noop
+            if [[ "$EVENT_SCHEDULE" == "35 14,15 * * 1-5" ]]; then
+              [[ "$ET_HOUR" == "10" && "$ET_MINUTE" -ge 30 ]] && MODE=main || MODE=noop
             elif [[ "$EVENT_SCHEDULE" == "50 16,17,19,20 * * 1-5" ]]; then
               if [[ "$ET_HOUR" == "12" && "$ET_MINUTE" == "50" ]]; then
                 MODE=mid
