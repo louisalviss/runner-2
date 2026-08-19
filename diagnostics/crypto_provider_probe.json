@@ -1,0 +1,48 @@
+{
+  "urls": [
+    "BINANCE:",
+    "https://api.pipai.org",
+    "https://fapi.binance.com"
+  ],
+  "functions": [
+    "choose_market_base",
+    "fetch_klines",
+    "request_json"
+  ],
+  "candidate_names": [],
+  "reachability": {
+    "fapi_exchangeInfo": {
+      "ok": false,
+      "error": "HTTPError: HTTP Error 451: ",
+      "ms": 364
+    },
+    "fapi_ticker24": {
+      "ok": false,
+      "error": "HTTPError: HTTP Error 451: ",
+      "ms": 60
+    },
+    "fapi_klines": {
+      "ok": false,
+      "error": "HTTPError: HTTP Error 451: ",
+      "ms": 27
+    },
+    "www_exchangeInfo": {
+      "ok": true,
+      "status": 200,
+      "ms": 859,
+      "sample": "{\"timezone\":\"UTC\",\"serverTime\":1787169610976,\"futuresType\":\"U_MARGINED\",\"rateLim"
+    },
+    "fapi1_exchangeInfo": {
+      "ok": true,
+      "status": 202,
+      "ms": 712,
+      "sample": ""
+    },
+    "fapi2_exchangeInfo": {
+      "ok": true,
+      "status": 202,
+      "ms": 761,
+      "sample": ""
+    }
+  }
+}
