@@ -1,0 +1,8 @@
+{
+  "patched_provider_nodes": 1,
+  "provider_order": [
+    "https://api.pipai.org",
+    "https://www.binance.com",
+    "https://fapi.binance.com"
+  ]
+}
