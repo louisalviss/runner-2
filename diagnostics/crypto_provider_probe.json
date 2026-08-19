@@ -14,35 +14,41 @@
     "fapi_exchangeInfo": {
       "ok": false,
       "error": "HTTPError: HTTP Error 451: ",
-      "ms": 364
+      "ms": 130
     },
     "fapi_ticker24": {
       "ok": false,
       "error": "HTTPError: HTTP Error 451: ",
-      "ms": 60
+      "ms": 18
     },
     "fapi_klines": {
       "ok": false,
       "error": "HTTPError: HTTP Error 451: ",
-      "ms": 27
+      "ms": 19
     },
     "www_exchangeInfo": {
       "ok": true,
       "status": 200,
-      "ms": 859,
-      "sample": "{\"timezone\":\"UTC\",\"serverTime\":1787169610976,\"futuresType\":\"U_MARGINED\",\"rateLim"
+      "ms": 603,
+      "sample": "{\"timezone\":\"UTC\",\"serverTime\":1787169610979,\"futuresType\":\"U_MARGINED\",\"rateLimits\":[{\"rateLimitType\":\"REQUEST_WEIGHT\","
     },
-    "fapi1_exchangeInfo": {
+    "www_ticker24": {
       "ok": true,
-      "status": 202,
-      "ms": 712,
-      "sample": ""
+      "status": 200,
+      "ms": 360,
+      "sample": "{\"closeTime\":1787174704237,\"count\":4807757,\"firstId\":7977688139,\"highPrice\":\"70450.00\",\"lastId\":7982514084,\"lastPrice\":\""
     },
-    "fapi2_exchangeInfo": {
+    "www_ticker_all": {
       "ok": true,
-      "status": 202,
-      "ms": 761,
-      "sample": ""
+      "status": 200,
+      "ms": 256,
+      "sample": "[{\"closeTime\":1787174700218,\"count\":113843,\"firstId\":163574427,\"highPrice\":\"0.0766800\",\"lastId\":163688273,\"lastPrice\":\"0"
+    },
+    "www_klines": {
+      "ok": true,
+      "status": 200,
+      "ms": 365,
+      "sample": "[[1787011200000,\"64504.10\",\"65057.90\",\"63979.20\",\"64694.00\",\"97513.888\",1787097599999,\"6285075890.83120\",1636466,\"49380."
     }
   }
 }
